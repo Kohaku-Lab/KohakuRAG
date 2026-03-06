@@ -8,7 +8,8 @@ When using multi-query retrieval (with `planner_max_queries > 1`), the same docu
 
 1. **Deduplicate** results by node_id
 2. **Rerank** results using frequency and total score metrics
-3. **Truncate** final results to a specified limit
+3. **Tree dedup** — remove child nodes whose ancestor is also retrieved
+4. **Truncate** final results to a specified limit
 
 ## Configuration Parameters
 
@@ -22,6 +23,9 @@ deduplicate_retrieval = True  # Remove duplicate nodes by node_id
 
 # Reranking strategy
 rerank_strategy = "frequency"  # Options: None, "frequency", "score", "combined"
+
+# Tree dedup (optional) — remove children when their ancestor is also retrieved
+tree_dedup = True  # Useful when retrieval targets multiple node levels
 
 # Final truncation (optional)
 top_k_final = 20  # Truncate to top-20 after dedup+rerank (None = no truncation)
@@ -39,6 +43,7 @@ pipeline = RAGPipeline(
     top_k=16,  # Results per query
     deduplicate_retrieval=True,
     rerank_strategy="frequency",
+    tree_dedup=True,  # Remove children when ancestor is also retrieved
     top_k_final=20
 )
 ```
@@ -135,6 +140,30 @@ combined_score = 0.4 × (frequency / max_frequency) + 0.6 × (total_score / max_
 
 **Use case:** Balance between frequency and score.
 
+## Tree Dedup (Parent Dedup)
+
+When retrieval targets multiple node levels (e.g., both SENTENCE and PARAGRAPH), different queries may return a parent and its child:
+
+```
+Query 1 → "doc:sec1:p2"       (paragraph)
+Query 2 → "doc:sec1:p2:s3"    (sentence within that paragraph)
+```
+
+Standard dedup only removes exact `node_id` duplicates, so both survive. With `tree_dedup=True`, the child is removed because its ancestor is already present — the parent's text already contains the child's text.
+
+**How it works:**
+- After dedup+rerank, collect all `node_id`s in the result set
+- For each node, check if any other node's ID is a prefix (ancestor)
+- Remove nodes that have an ancestor present (keep the broader parent)
+
+**Example:**
+```
+Before tree dedup: [doc:sec1:p2, doc:sec1:p2:s3, doc:sec2:p1, doc:sec2:p1:s1]
+After tree dedup:  [doc:sec1:p2, doc:sec2:p1]
+```
+
+**When to use:** Enable when your retrieval searches multiple node levels (SENTENCE + PARAGRAPH) and you want to avoid wasting context window on redundant content.
+
 ## Recommended Configurations
 
 ### For Maximum Recall (Research, Exploration)
@@ -213,11 +242,13 @@ When a document appears in multiple query results:
       ↓
 5. Reranking (if enabled, sort by strategy)
       ↓
-6. Truncation (if top_k_final set, keep top N)
+6. Tree Dedup (if enabled, remove children with ancestor present)
       ↓
-7. Context Expansion (add parent/child nodes)
+7. Truncation (if top_k_final set, keep top N)
       ↓
-8. Return RetrievalResult
+8. Context Expansion (add parent/child nodes)
+      ↓
+9. Return RetrievalResult
 ```
 
 ## Example: Full Configuration
@@ -282,6 +313,7 @@ If you have existing configs, add these lines:
 # Add after planner_max_queries
 deduplicate_retrieval = False  # Keep original behavior
 rerank_strategy = None         # Keep original behavior
+tree_dedup = False             # Keep original behavior
 top_k_final = None            # Keep original behavior
 ```
 
@@ -306,6 +338,7 @@ pipeline = RAGPipeline(
     top_k=16,
     deduplicate_retrieval=True,   # Optional
     rerank_strategy="frequency",  # Optional
+    tree_dedup=True,              # Optional
     top_k_final=20               # Optional
 )
 ```
@@ -334,6 +367,14 @@ A: `"frequency"` is recommended for most cases as it prioritizes documents relev
 **Q: What's the difference between `top_k` and `top_k_final`?**
 
 A: `top_k` controls how many results each query returns. `top_k_final` truncates the final deduplicated+reranked results. Example: `top_k=16, max_queries=3, top_k_final=20` retrieves 48 docs, then keeps top-20.
+
+**Q: What's the difference between `tree_dedup` and `no_overlap`?**
+
+A: Both remove parent-child redundancy, but at different pipeline stages:
+- `tree_dedup` operates on **retrieval matches** (before context expansion and truncation). It reduces the match count, freeing slots for other unique content.
+- `no_overlap` operates on **context snippets** (after context expansion). It removes overlap introduced by the expansion step itself.
+
+They are complementary — `tree_dedup` handles overlap from multi-level retrieval, while `no_overlap` handles overlap from context expansion.
 
 **Q: Does reranking automatically deduplicate?**
 
