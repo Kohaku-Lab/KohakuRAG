@@ -299,6 +299,7 @@ class RAGPipeline:
         image_store: ImageStore | None = None,
         no_overlap: bool = False,
         bm25_top_k: int = 0,
+        tree_dedup: bool = False,
     ) -> None:
         """Initialize RAG pipeline with pluggable components.
 
@@ -323,6 +324,10 @@ class RAGPipeline:
             bm25_top_k: Number of additional results from BM25 sparse search (0 = disabled).
                        These results are added to dense retrieval results for context expansion,
                        NOT used for score fusion. This adds complementary keyword-matched content.
+            tree_dedup: If True, remove matches whose ancestor (parent, grandparent, etc.)
+                       is also present in the results. This prevents redundant child nodes
+                       when multi-level retrieval returns both a parent and its descendants.
+                       Applied after dedup+rerank, before top_k_final truncation.
         """
         self._store = store or InMemoryNodeStore()
         self._embedder = embedder or JinaEmbeddingModel()
@@ -335,6 +340,7 @@ class RAGPipeline:
         self._image_store = image_store
         self._no_overlap = no_overlap
         self._bm25_top_k = bm25_top_k
+        self._tree_dedup = tree_dedup
 
     @property
     def store(self) -> HierarchicalNodeStore:
@@ -367,6 +373,44 @@ class RAGPipeline:
                 unique_matches.append(match)
 
         return unique_matches
+
+    def _tree_deduplicate_matches(
+        self, matches: list[RetrievalMatch]
+    ) -> list[RetrievalMatch]:
+        """Remove matches whose ancestor is also present in the results.
+
+        When multi-level retrieval returns both a parent node and its child
+        (e.g., paragraph "doc:sec1:p2" and sentence "doc:sec1:p2:s3"), the
+        child's text is contained within the parent. This method removes such
+        children to avoid redundant context.
+
+        Ancestor relationship is determined by node_id prefix:
+        "doc:sec1:p2:s3" is a descendant of "doc:sec1:p2" because it starts
+        with "doc:sec1:p2:".
+
+        Args:
+            matches: List of retrieval matches (already deduplicated by node_id)
+
+        Returns:
+            Filtered list with no descendant nodes whose ancestor is present
+        """
+        if not matches:
+            return matches
+
+        all_ids = {m.node.node_id for m in matches}
+
+        # Find ids that have an ancestor in the set
+        ids_with_ancestor: set[str] = set()
+        for node_id in all_ids:
+            for other_id in all_ids:
+                if other_id != node_id and node_id.startswith(other_id + ":"):
+                    ids_with_ancestor.add(node_id)
+                    break
+
+        if not ids_with_ancestor:
+            return matches
+
+        return [m for m in matches if m.node.node_id not in ids_with_ancestor]
 
     def _rerank_matches(
         self, matches: list[RetrievalMatch], num_queries: int
@@ -474,6 +518,9 @@ class RAGPipeline:
           Results are simply concatenated in planner order (original behavior)
         - If deduplicate_retrieval=True:
           Duplicate nodes (by node_id) are removed, keeping first occurrence
+        - If tree_dedup=True:
+          After dedup+rerank, nodes whose ancestor is also present are removed
+          (e.g., sentence "doc:sec1:p2:s3" removed if paragraph "doc:sec1:p2" exists)
         - If rerank_strategy is set:
           Results are reranked using the specified strategy
           ("frequency", "score", or "combined") with frequency + total_score
@@ -535,6 +582,10 @@ class RAGPipeline:
         # Note: reranking also deduplicates and uses frequency + total_score
         if self._rerank_strategy:
             all_matches = self._rerank_matches(all_matches, len(queries))
+
+        # Apply tree dedup: remove nodes whose ancestor is also in results
+        if self._tree_dedup:
+            all_matches = self._tree_deduplicate_matches(all_matches)
 
         # Apply top_k_final truncation if configured
         if self._top_k_final is not None and self._top_k_final > 0:
