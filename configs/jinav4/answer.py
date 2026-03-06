@@ -27,6 +27,7 @@ planner_max_queries = 3
 deduplicate_retrieval = True
 rerank_strategy = "frequency"  # Options: None, "frequency", "score", "combined"
 top_k_final = 24  # Truncate to top-24 after dedup+rerank (None = no truncation)
+tree_dedup = False  # Remove child nodes when their ancestor is also retrieved
 
 # JinaV4 embedding settings (must match index)
 embedding_model = "jinav4"  # Options: "jina" (v3), "jinav4"

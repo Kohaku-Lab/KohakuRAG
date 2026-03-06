@@ -29,6 +29,7 @@ rerank_strategy = "combined"  # Options: None, "frequency", "score", "combined"
 top_k_final = (
     24  # Truncate to this many results after dedup+rerank (None = no truncation)
 )
+tree_dedup = False  # Remove child nodes when their ancestor is also retrieved
 
 # Embedding settings (must match index)
 embedding_model = "jina"  # Options: "jina" (v3), "jinav4"

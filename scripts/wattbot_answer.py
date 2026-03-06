@@ -114,6 +114,7 @@ planner_max_queries = 3
 deduplicate_retrieval = False  # Deduplicate text results by node_id across queries
 rerank_strategy = None  # Options: None, "frequency", "score", "combined"
 top_k_final = None  # Optional: truncate to this many results after dedup+rerank (None = no truncation)
+tree_dedup = False  # Remove child nodes when their ancestor is also retrieved
 
 # Embedding settings
 embedding_model = "jina"  # Options: "jina" (v3), "jinav4"
@@ -562,6 +563,7 @@ def create_pipeline() -> RAGPipeline:
         image_store=image_store,
         no_overlap=no_overlap,
         bm25_top_k=bm25_top_k,
+        tree_dedup=tree_dedup,
     )
 
     return pipeline
