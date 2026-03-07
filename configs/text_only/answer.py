@@ -29,7 +29,11 @@ rerank_strategy = "frequency"  # Options: None, "frequency", "score", "combined"
 top_k_final = (
     None  # Truncate to this many results after dedup+rerank (None = no truncation)
 )
-tree_dedup = False  # Remove child nodes when their ancestor is also retrieved
+snippet_dedup = (
+    "none"  # Snippet-level dedup after context expansion: "none", "node_id", "tree"
+)
+parent_depth = 1  # How many parent levels to include during context expansion
+child_depth = 0  # How many child levels to include during context expansion
 
 # Embedding settings (must match index)
 embedding_model = "jina"  # Options: "jina" (v3), "jinav4"

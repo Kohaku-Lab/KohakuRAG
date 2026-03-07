@@ -114,7 +114,11 @@ planner_max_queries = 3
 deduplicate_retrieval = False  # Deduplicate text results by node_id across queries
 rerank_strategy = None  # Options: None, "frequency", "score", "combined"
 top_k_final = None  # Optional: truncate to this many results after dedup+rerank (None = no truncation)
-tree_dedup = False  # Remove child nodes when their ancestor is also retrieved
+snippet_dedup = (
+    "none"  # Snippet-level dedup after context expansion: "none", "node_id", "tree"
+)
+parent_depth = 1  # How many parent levels to include during context expansion
+child_depth = 0  # How many child levels to include during context expansion
 
 # Embedding settings
 embedding_model = "jina"  # Options: "jina" (v3), "jinav4"
@@ -146,8 +150,6 @@ bm25_top_k = 0
 # Prompt ordering: if True, use reordered prompt (context before question)
 use_reordered_prompt = False
 
-# Context overlap: if True, remove overlapping snippets (keep only parent nodes)
-no_overlap = False
 
 # ============================================================================
 # PROMPT TEMPLATES
@@ -561,9 +563,10 @@ def create_pipeline() -> RAGPipeline:
         rerank_strategy=rerank_strategy,
         top_k_final=top_k_final,
         image_store=image_store,
-        no_overlap=no_overlap,
         bm25_top_k=bm25_top_k,
-        tree_dedup=tree_dedup,
+        parent_depth=parent_depth,
+        child_depth=child_depth,
+        snippet_dedup=snippet_dedup,
     )
 
     return pipeline

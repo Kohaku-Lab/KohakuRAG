@@ -813,26 +813,34 @@ async def matches_to_snippets(
     *,
     parent_depth: int = 1,
     child_depth: int = 0,
+    dedup: str = "none",
     no_overlap: bool = False,
 ) -> list[ContextSnippet]:
     """Convert retrieval matches into context snippets using hierarchical context.
 
     For each matched node, this helper pulls a small neighborhood of parents
     and children via ``get_context`` and flattens them into ``ContextSnippet``
-    objects.
+    objects.  Deduplication is applied **after** expansion.
 
     Args:
         matches: List of retrieval matches
         store: Node store for context lookup
         parent_depth: How many parent levels to include
         child_depth: How many child levels to include
-        no_overlap: If True, remove overlapping nodes by keeping only the largest
-                   (parent) node when parent-child pairs exist. This reduces
-                   redundant text in the context.
+        dedup: Snippet-level deduplication mode:
+            - ``"none"``: keep all snippets (including duplicates from expansion)
+            - ``"node_id"``: remove duplicate snippets by ``node_id``
+            - ``"tree"``: remove duplicates *and* remove snippets whose ancestor
+              is also present (subsumes ``"node_id"``)
+        no_overlap: **Deprecated** — equivalent to ``dedup="tree"``.
 
     Returns:
         List of context snippets
     """
+    # Backward compatibility
+    if no_overlap and dedup == "none":
+        dedup = "tree"
+
     snippets: list[ContextSnippet] = []
     for rank, match in enumerate(matches, 1):
         nodes = await store.get_context(
@@ -854,10 +862,25 @@ async def matches_to_snippets(
                 )
             )
 
-    if no_overlap:
+    if dedup == "node_id":
+        snippets = _dedup_snippets_by_node_id(snippets)
+    elif dedup == "tree":
         snippets = _remove_overlapping_snippets(snippets)
 
     return snippets
+
+
+def _dedup_snippets_by_node_id(
+    snippets: list[ContextSnippet],
+) -> list[ContextSnippet]:
+    """Deduplicate snippets by ``node_id``, keeping the first occurrence."""
+    seen: set[str] = set()
+    result: list[ContextSnippet] = []
+    for s in snippets:
+        if s.node_id not in seen:
+            seen.add(s.node_id)
+            result.append(s)
+    return result
 
 
 def _remove_overlapping_snippets(

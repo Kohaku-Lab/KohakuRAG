@@ -297,8 +297,12 @@ class RAGPipeline:
         rerank_strategy: str | None = None,
         top_k_final: int | None = None,
         image_store: ImageStore | None = None,
-        no_overlap: bool = False,
         bm25_top_k: int = 0,
+        parent_depth: int = 1,
+        child_depth: int = 0,
+        snippet_dedup: str = "none",
+        # Deprecated — kept for backward compatibility
+        no_overlap: bool = False,
         tree_dedup: bool = False,
     ) -> None:
         """Initialize RAG pipeline with pluggable components.
@@ -312,22 +316,18 @@ class RAGPipeline:
             planner: Query expansion strategy
             top_k: Default number of results per query
             deduplicate_retrieval: Whether to deduplicate results by node_id
+                before reranking (for efficiency; reranking also deduplicates)
             rerank_strategy: Strategy for reranking multi-query results
                             Options: None, "frequency", "score", "combined"
             top_k_final: Optional truncation after dedup+rerank (None = no truncation)
-                        Example: top_k=16, max_queries=3, top_k_final=20
-                        -> retrieves 48 docs, dedup+rerank, truncate to 20
             image_store: Optional ImageStore for vision-enabled LLM support
-            no_overlap: If True, remove overlapping snippets during context expansion.
-                       When parent-child pairs exist, only keep the parent to avoid
-                       redundant text in the context.
             bm25_top_k: Number of additional results from BM25 sparse search (0 = disabled).
-                       These results are added to dense retrieval results for context expansion,
-                       NOT used for score fusion. This adds complementary keyword-matched content.
-            tree_dedup: If True, remove matches whose ancestor (parent, grandparent, etc.)
-                       is also present in the results. This prevents redundant child nodes
-                       when multi-level retrieval returns both a parent and its descendants.
-                       Applied after dedup+rerank, before top_k_final truncation.
+            parent_depth: How many parent levels to include during context expansion.
+            child_depth: How many child levels to include during context expansion.
+            snippet_dedup: Snippet-level deduplication applied *after* context expansion.
+                Options: "none", "node_id", "tree".
+            no_overlap: **Deprecated** — use ``snippet_dedup="tree"`` instead.
+            tree_dedup: **Deprecated** — use ``snippet_dedup="tree"`` instead.
         """
         self._store = store or InMemoryNodeStore()
         self._embedder = embedder or JinaEmbeddingModel()
@@ -338,9 +338,13 @@ class RAGPipeline:
         self._rerank_strategy = rerank_strategy
         self._top_k_final = top_k_final
         self._image_store = image_store
-        self._no_overlap = no_overlap
         self._bm25_top_k = bm25_top_k
-        self._tree_dedup = tree_dedup
+        self._parent_depth = parent_depth
+        self._child_depth = child_depth
+        # Backward compatibility: map old flags to snippet_dedup
+        if (tree_dedup or no_overlap) and snippet_dedup == "none":
+            snippet_dedup = "tree"
+        self._snippet_dedup = snippet_dedup
 
     @property
     def store(self) -> HierarchicalNodeStore:
@@ -518,8 +522,8 @@ class RAGPipeline:
           Results are simply concatenated in planner order (original behavior)
         - If deduplicate_retrieval=True:
           Duplicate nodes (by node_id) are removed, keeping first occurrence
-        - If tree_dedup=True:
-          After dedup+rerank, nodes whose ancestor is also present are removed
+        - If snippet_dedup="tree":
+          After context expansion, snippets whose ancestor is also present are removed
           (e.g., sentence "doc:sec1:p2:s3" removed if paragraph "doc:sec1:p2" exists)
         - If rerank_strategy is set:
           Results are reranked using the specified strategy
@@ -583,10 +587,6 @@ class RAGPipeline:
         if self._rerank_strategy:
             all_matches = self._rerank_matches(all_matches, len(queries))
 
-        # Apply tree dedup: remove nodes whose ancestor is also in results
-        if self._tree_dedup:
-            all_matches = self._tree_deduplicate_matches(all_matches)
-
         # Apply top_k_final truncation if configured
         if self._top_k_final is not None and self._top_k_final > 0:
             all_matches = all_matches[: self._top_k_final]
@@ -617,13 +617,13 @@ class RAGPipeline:
                     if len(seen_bm25_ids) >= bm25_k:
                         break
 
-        # Expand each match with hierarchical context
+        # Expand each match with hierarchical context, then deduplicate snippets
         snippets = await matches_to_snippets(
             all_matches,
             self._store,
-            parent_depth=1,  # Include parent paragraph/section
-            child_depth=1,  # Include child sentences
-            no_overlap=self._no_overlap,
+            parent_depth=self._parent_depth,
+            child_depth=self._child_depth,
+            dedup=self._snippet_dedup,
         )
 
         return RetrievalResult(
