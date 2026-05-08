@@ -117,7 +117,7 @@ def read_images_from_document(
                 continue
 
             # Create lookup
-            image_lookup = {i: img for i, img in enumerate(images, 1)}
+            image_lookup = dict(enumerate(images, 1))
 
             # Find image paragraphs
             for para in section.paragraphs:
@@ -455,7 +455,7 @@ async def main() -> None:
             if len(tasks) > 0:
                 print(f" - ✓ {len(tasks)} captions")
             else:
-                print(f" - ✓ (no images)")
+                print(" - ✓ (no images)")
 
         except Exception as e:
             print(f"  ❌ ERROR: {e}")

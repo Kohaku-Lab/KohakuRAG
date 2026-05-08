@@ -79,7 +79,7 @@ async def main() -> None:
             )
 
     print(f"\n{'=' * 50}")
-    print(f"RESULTS")
+    print("RESULTS")
     print(f"{'=' * 50}")
     print(f"Total sentences: {sentence_count}")
     print(f"Total tokens (no special tokens): {total_tokens}")

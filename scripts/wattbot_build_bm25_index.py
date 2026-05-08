@@ -130,7 +130,7 @@ async def main() -> None:
             skipped += 1
             continue
 
-    print(f"\nBM25 Index Complete!")
+    print("\nBM25 Index Complete!")
     print(f"  Total indexed: {total_indexed}")
     print(f"  Skipped: {skipped}")
     print(f"  Database: {db_path}")

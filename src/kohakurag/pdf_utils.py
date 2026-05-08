@@ -40,7 +40,7 @@ def _extract_images(page) -> list[dict[str, Any]]:
                 except Exception:
                     pass
             images.append(image_info)
-    except Exception as e:
+    except Exception:
         # Fallback to old method if page.images fails
         images = _extract_images_fallback(page)
     return images

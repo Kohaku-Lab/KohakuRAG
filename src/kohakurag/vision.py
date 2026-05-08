@@ -448,6 +448,7 @@ class OpenRouterVisionModel(VisionModel):
         Raises:
             Exception: If API returns an error or response is invalid
         """
+        del max_tokens  # SDK does not currently expose max_tokens; preserved for API parity
         # Use OpenRouter SDK with context manager (required for proper auth)
         async with OpenRouter(api_key=self._api_key) as client:
             try:

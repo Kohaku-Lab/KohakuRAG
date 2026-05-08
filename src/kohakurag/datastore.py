@@ -13,6 +13,8 @@ from .types import ContextSnippet, NodeKind, RetrievalMatch, StoredNode
 # Runtime embedding selection mode for paragraphs
 ParagraphSearchMode = Literal["averaged", "full", "both"]
 
+_QUERY_VECTOR_DIM_ERROR = "query_vector must be a 1D numpy array."
+
 
 class HierarchicalNodeStore:
     """Abstract interface for node stores."""
@@ -31,6 +33,7 @@ class HierarchicalNodeStore:
         *,
         k: int = 5,
         kinds: set[NodeKind] | None = None,
+        paragraph_search_mode: ParagraphSearchMode | None = None,
     ) -> list[RetrievalMatch]:  # pragma: no cover
         raise NotImplementedError
 
@@ -71,10 +74,11 @@ class InMemoryNodeStore(HierarchicalNodeStore):
         *,
         k: int = 5,
         kinds: set[NodeKind] | None = None,
+        paragraph_search_mode: ParagraphSearchMode | None = None,
     ) -> list[RetrievalMatch]:
         """Brute-force linear scan with cosine similarity."""
         if query_vector.ndim != 1:
-            raise ValueError("query_vector must be a 1D numpy array.")
+            raise ValueError(_QUERY_VECTOR_DIM_ERROR)
 
         normalized_query = self._normalize(query_vector)
         matches: list[RetrievalMatch] = []
@@ -198,61 +202,15 @@ class KVaultNodeStore(HierarchicalNodeStore):
         self._kv = KVault(self._path, table=f"{table_prefix}_kv")
         self._kv.enable_auto_pack()
 
-        # Validate or infer dimensions from stored metadata
-        stored_meta = self._kv.get(self.META_KEY, None)
-        inferred_dimensions: int | None = None
-
-        if stored_meta is not None:
-            inferred_dimensions = int(stored_meta.get("dimensions"))
-            inferred_metric = stored_meta.get("metric", metric)
-            if inferred_metric != metric:
-                metric = inferred_metric  # Use stored metric
-
-        # If dimensions not provided and not in metadata, try to infer from vector table
+        metric, inferred_dimensions = self._read_stored_metadata(metric)
         if dimensions is None and inferred_dimensions is None:
-            try:
-                # Try opening existing vector table to get dimensions
-                existing_vectors = VectorKVault(
-                    self._path,
-                    table=f"{table_prefix}_vec",
-                    dimensions=1,  # Dummy, will be overwritten
-                    metric=metric,
-                )
-                info = existing_vectors.info()
-                if info.get("count", 0) > 0:
-                    inferred_dimensions = int(info.get("dimensions", 0))
-                    if inferred_dimensions > 0:
-                        # Update metadata with inferred dimensions
-                        self._kv[self.META_KEY] = {
-                            "dimensions": inferred_dimensions,
-                            "metric": metric,
-                        }
-            except Exception:
-                pass
-
-        # Determine final dimensions
-        if dimensions is not None:
-            final_dimensions = dimensions
-        elif inferred_dimensions is not None:
-            final_dimensions = inferred_dimensions
-        else:
-            raise ValueError(
-                "Embedding dimension required for new store. Pass dimensions=... "
-                "when creating the index."
+            inferred_dimensions = self._try_infer_dimensions_from_vec_table(
+                table_prefix, metric
             )
 
-        self._dimensions = int(final_dimensions)
-
-        # Check dimension consistency if both provided and stored
-        if (
-            dimensions is not None
-            and inferred_dimensions is not None
-            and dimensions != inferred_dimensions
-        ):
-            raise ValueError(
-                f"Existing store was built with dimension {inferred_dimensions}, "
-                f"but {dimensions} was requested."
-            )
+        self._dimensions = int(
+            self._resolve_dimensions(dimensions, inferred_dimensions)
+        )
 
         # Store/update metadata
         self._kv[self.META_KEY] = {"dimensions": self._dimensions, "metric": metric}
@@ -267,45 +225,94 @@ class KVaultNodeStore(HierarchicalNodeStore):
         self._vectors.enable_auto_pack()
         self._metric = metric
 
-        # Optional: full paragraph vector table (for "both" embedding mode)
-        self._para_full_vectors: VectorKVault | None = None
-        try:
-            self._para_full_vectors = VectorKVault(
-                self._path,
-                table=f"{table_prefix}_para_full_vec",
-                dimensions=self._dimensions,
-                metric=metric,
-            )
-            self._para_full_vectors.enable_auto_pack()
-        except Exception:
-            # Table doesn't exist - that's fine, it's created on demand
-            pass
-
-        # Optional: image-only vector table (created by wattbot_build_image_index.py)
-        self._image_vectors: VectorKVault | None = None
-        try:
-            self._image_vectors = VectorKVault(
-                self._path,
-                table=f"{table_prefix}_images_vec",
-                dimensions=self._dimensions,
-                metric=metric,
-            )
-            self._image_vectors.enable_auto_pack()
-        except Exception:
-            # Image-only table doesn't exist - that's fine, it's optional
-            pass
-
-        # Optional: BM25 (FTS5) text search table (created by wattbot_build_bm25_index.py)
-        self._bm25: TextVault | None = None
-        try:
-            self._bm25 = TextVault(self._path, table=f"{table_prefix}_bm25")
-            self._bm25.enable_auto_pack()
-        except Exception:
-            # BM25 table doesn't exist - that's fine, it's optional
-            pass
+        # Optional auxiliary tables — silently ignored if they don't exist
+        self._para_full_vectors = self._try_open_vector_table(
+            f"{table_prefix}_para_full_vec", metric
+        )
+        self._image_vectors = self._try_open_vector_table(
+            f"{table_prefix}_images_vec", metric
+        )
+        self._bm25 = self._try_open_bm25_table(f"{table_prefix}_bm25")
 
         # Single-worker executor for thread-safe async SQLite operations
         self._executor = ThreadPoolExecutor(max_workers=1)
+
+    def _read_stored_metadata(self, metric: str) -> tuple[str, int | None]:
+        """Return (effective_metric, inferred_dimensions) from stored metadata."""
+        stored_meta = self._kv.get(self.META_KEY, None)
+        if stored_meta is None:
+            return metric, None
+        inferred_dimensions = int(stored_meta.get("dimensions"))
+        inferred_metric = stored_meta.get("metric", metric)
+        return inferred_metric, inferred_dimensions
+
+    def _try_infer_dimensions_from_vec_table(
+        self, table_prefix: str, metric: str
+    ) -> int | None:
+        """Best-effort: open existing vector table and read its embedded dimension."""
+        try:
+            existing_vectors = VectorKVault(
+                self._path,
+                table=f"{table_prefix}_vec",
+                dimensions=1,  # Dummy, will be overwritten
+                metric=metric,
+            )
+            info = existing_vectors.info()
+            if info.get("count", 0) <= 0:
+                return None
+            inferred = int(info.get("dimensions", 0))
+            if inferred <= 0:
+                return None
+            self._kv[self.META_KEY] = {"dimensions": inferred, "metric": metric}
+            return inferred
+        except Exception:
+            return None
+
+    @staticmethod
+    def _resolve_dimensions(
+        dimensions: int | None, inferred_dimensions: int | None
+    ) -> int:
+        """Pick final dimension, raising on conflict or missing value."""
+        if dimensions is not None and inferred_dimensions is not None:
+            if dimensions != inferred_dimensions:
+                raise ValueError(
+                    f"Existing store was built with dimension {inferred_dimensions}, "
+                    f"but {dimensions} was requested."
+                )
+            return dimensions
+        if dimensions is not None:
+            return dimensions
+        if inferred_dimensions is not None:
+            return inferred_dimensions
+        raise ValueError(
+            "Embedding dimension required for new store. Pass dimensions=... "
+            "when creating the index."
+        )
+
+    def _try_open_vector_table(
+        self, table_name: str, metric: str
+    ) -> VectorKVault | None:
+        """Open optional vector table; return None if it doesn't exist yet."""
+        try:
+            table = VectorKVault(
+                self._path,
+                table=table_name,
+                dimensions=self._dimensions,
+                metric=metric,
+            )
+            table.enable_auto_pack()
+            return table
+        except Exception:
+            return None
+
+    def _try_open_bm25_table(self, table_name: str) -> TextVault | None:
+        """Open optional BM25 (FTS5) table; return None if it doesn't exist yet."""
+        try:
+            table = TextVault(self._path, table=table_name)
+            table.enable_auto_pack()
+            return table
+        except Exception:
+            return None
 
     def __del__(self) -> None:
         """Cleanup executor on deletion."""
@@ -387,6 +394,91 @@ class KVaultNodeStore(HierarchicalNodeStore):
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(self._executor, self._sync_get_node, node_id)
 
+    def _distance_to_score(self, distance: float) -> float:
+        """Map a vector distance to a similarity score per the active metric."""
+        if self._metric == "cosine":
+            return 1.0 - float(distance)
+        return -float(distance)
+
+    def _resolve_search_plan(
+        self,
+        mode: ParagraphSearchMode,
+        kinds: set[NodeKind] | None,
+    ) -> tuple[bool, bool, bool]:
+        """Decide which vector tables to query for the requested mode/kinds.
+
+        Returns (search_main, search_para_full, skip_paragraphs_in_main).
+        """
+        if mode == "full" and self._para_full_vectors is not None:
+            if kinds is not None and kinds == {NodeKind.PARAGRAPH}:
+                return False, True, False
+            if kinds is None or NodeKind.PARAGRAPH in kinds:
+                return True, True, True
+            return True, False, False
+
+        if mode == "both" and self._para_full_vectors is not None:
+            if kinds is None or NodeKind.PARAGRAPH in kinds:
+                return True, True, False
+
+        return True, False, False
+
+    def _search_main_table(
+        self,
+        query_vector: np.ndarray,
+        k: int,
+        kinds: set[NodeKind] | None,
+        skip_paragraphs_in_main: bool,
+    ) -> tuple[list[RetrievalMatch], set[str]]:
+        """Run dense search against the main vector table; return matches + seen ids."""
+        results = self._vectors.search(query_vector.astype(np.float32), k=k)
+        matches: list[RetrievalMatch] = []
+        seen: set[str] = set()
+        for _row_id, distance, node_id in results:
+            node = self._sync_get_node(node_id)
+            if kinds is not None and node.kind not in kinds:
+                continue
+            if skip_paragraphs_in_main and node.kind == NodeKind.PARAGRAPH:
+                continue
+            matches.append(
+                RetrievalMatch(node=node, score=self._distance_to_score(distance))
+            )
+            seen.add(node_id)
+        return matches, seen
+
+    def _search_para_full_table(
+        self, query_vector: np.ndarray, k: int
+    ) -> list[RetrievalMatch]:
+        """Run dense search against the full-paragraph vector table."""
+        if self._para_full_vectors is None:
+            return []
+        para_results = self._para_full_vectors.search(
+            query_vector.astype(np.float32), k=k
+        )
+        matches: list[RetrievalMatch] = []
+        for _row_id, distance, node_id in para_results:
+            try:
+                node = self._sync_get_node(node_id)
+                matches.append(
+                    RetrievalMatch(node=node, score=self._distance_to_score(distance))
+                )
+            except Exception:
+                continue
+        return matches
+
+    @staticmethod
+    def _dedup_matches_by_node_id(
+        matches: list[RetrievalMatch],
+    ) -> list[RetrievalMatch]:
+        """Keep first occurrence of each node_id (assumes input pre-sorted)."""
+        deduped: list[RetrievalMatch] = []
+        seen: set[str] = set()
+        for match in matches:
+            if match.node.node_id in seen:
+                continue
+            seen.add(match.node.node_id)
+            deduped.append(match)
+        return deduped
+
     def _sync_search(
         self,
         query_vector: np.ndarray,
@@ -403,98 +495,27 @@ class KVaultNodeStore(HierarchicalNodeStore):
             paragraph_search_mode: Override instance-level paragraph search mode
         """
         if query_vector.ndim != 1:
-            raise ValueError("query_vector must be a 1D numpy array.")
+            raise ValueError(_QUERY_VECTOR_DIM_ERROR)
 
-        # Determine which search mode to use
         mode = paragraph_search_mode or self._paragraph_search_mode
-
-        # Decide which vector tables to search based on mode
-        search_main = True
-        search_para_full = False
-        skip_paragraphs_in_main = False  # For "full" mode only
-
-        if mode == "full" and self._para_full_vectors is not None:
-            # For "full" mode with paragraph filter, only search para_full table
-            if kinds is not None and kinds == {NodeKind.PARAGRAPH}:
-                search_main = False
-                search_para_full = True
-            elif kinds is None or NodeKind.PARAGRAPH in kinds:
-                # Mixed search: search both tables, skip paragraphs in main
-                search_para_full = True
-                skip_paragraphs_in_main = True
-
-        elif mode == "both" and self._para_full_vectors is not None:
-            # For "both" mode: search both tables for paragraphs, merge by score
-            if kinds is None or NodeKind.PARAGRAPH in kinds:
-                search_para_full = True
-                # Don't skip paragraphs in main - we want results from both tables
+        search_main, search_para_full, skip_paragraphs_in_main = (
+            self._resolve_search_plan(mode, kinds)
+        )
 
         all_matches: list[RetrievalMatch] = []
-        seen_node_ids: set[str] = set()  # For deduplication in "both" mode
-
-        # Search main vector table
         if search_main:
-            results = self._vectors.search(
-                query_vector.astype(np.float32),
-                k=k,
+            main_matches, _seen = self._search_main_table(
+                query_vector, k, kinds, skip_paragraphs_in_main
             )
+            all_matches.extend(main_matches)
 
-            for row_id, distance, node_id in results:
-                node = self._sync_get_node(node_id)
+        if search_para_full:
+            all_matches.extend(self._search_para_full_table(query_vector, k))
 
-                # Skip if node type doesn't match filter
-                if kinds is not None and node.kind not in kinds:
-                    continue
-
-                # In full mode, skip paragraphs from main table (use para_full instead)
-                if skip_paragraphs_in_main and node.kind == NodeKind.PARAGRAPH:
-                    continue
-
-                score = (
-                    1.0 - float(distance)
-                    if self._metric == "cosine"
-                    else -float(distance)
-                )
-                all_matches.append(RetrievalMatch(node=node, score=score))
-                seen_node_ids.add(node_id)
-
-        # Search full paragraph vector table
-        if search_para_full and self._para_full_vectors is not None:
-            para_results = self._para_full_vectors.search(
-                query_vector.astype(np.float32),
-                k=k,
-            )
-
-            for row_id, distance, node_id in para_results:
-                # In "both" mode, skip if already seen from main table
-                # (keep the higher score by sorting later)
-                if mode == "both" and node_id in seen_node_ids:
-                    # Still add it - we'll deduplicate by keeping max score
-                    pass
-
-                try:
-                    node = self._sync_get_node(node_id)
-                    score = (
-                        1.0 - float(distance)
-                        if self._metric == "cosine"
-                        else -float(distance)
-                    )
-                    all_matches.append(RetrievalMatch(node=node, score=score))
-                except Exception:
-                    continue
-
-        # Sort all matches by score
         all_matches.sort(key=lambda item: item.score, reverse=True)
 
-        # For "both" mode: deduplicate keeping highest score (already sorted)
         if mode == "both":
-            deduped: list[RetrievalMatch] = []
-            dedup_ids: set[str] = set()
-            for match in all_matches:
-                if match.node.node_id not in dedup_ids:
-                    dedup_ids.add(match.node.node_id)
-                    deduped.append(match)
-            return deduped[:k]
+            return self._dedup_matches_by_node_id(all_matches)[:k]
 
         return all_matches[:k]
 
@@ -534,7 +555,7 @@ class KVaultNodeStore(HierarchicalNodeStore):
     ) -> list[RetrievalMatch]:
         """Search image-only vector table (synchronous, called via executor)."""
         if query_vector.ndim != 1:
-            raise ValueError("query_vector must be a 1D numpy array.")
+            raise ValueError(_QUERY_VECTOR_DIM_ERROR)
 
         if self._image_vectors is None:
             # No image-only table - return empty

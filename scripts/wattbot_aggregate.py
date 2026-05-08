@@ -70,19 +70,19 @@ def parse_ref_ids(ref_str: str) -> set[str]:
     try:
         parsed = ast.literal_eval(ref_str)
         if isinstance(parsed, list):
-            return set(str(x).strip() for x in parsed if x)
+            return {str(x).strip() for x in parsed if x}
     except (ValueError, SyntaxError):
         pass
 
     # Try comma-separated
-    return set(x.strip() for x in ref_str.split(",") if x.strip())
+    return {x.strip() for x in ref_str.split(",") if x.strip()}
 
 
 def format_ref_ids(ref_set: set[str]) -> str:
     """Format ref_id set back to CSV format."""
     if not ref_set:
         return "is_blank"
-    return str(sorted(list(ref_set)))
+    return str(sorted(ref_set))
 
 
 def normalize_value(value: str) -> str:
@@ -228,6 +228,15 @@ def aggregate_question_intersection(
     return best_val, format_ref_ids(combined_refs)
 
 
+_AGGREGATORS_BY_MODE = {
+    "independent": aggregate_question_independent,
+    "ref_priority": aggregate_question_ref_priority,
+    "answer_priority": aggregate_question_answer_priority,
+    "union": aggregate_question_union,
+    "intersection": aggregate_question_intersection,
+}
+
+
 def aggregate_results(
     csv_paths: list[Path],
     ref_mode: Literal[
@@ -290,20 +299,10 @@ def aggregate_results(
                 continue
 
         # Aggregate based on mode
-        if ref_mode == "independent":
-            best_val, best_ref = aggregate_question_independent(answers, filter_blank)
-        elif ref_mode == "ref_priority":
-            best_val, best_ref = aggregate_question_ref_priority(answers, filter_blank)
-        elif ref_mode == "answer_priority":
-            best_val, best_ref = aggregate_question_answer_priority(
-                answers, filter_blank
-            )
-        elif ref_mode == "union":
-            best_val, best_ref = aggregate_question_union(answers, filter_blank)
-        elif ref_mode == "intersection":
-            best_val, best_ref = aggregate_question_intersection(answers, filter_blank)
-        else:
+        aggregator = _AGGREGATORS_BY_MODE.get(ref_mode)
+        if aggregator is None:
             raise ValueError(f"Unknown ref_mode: {ref_mode}")
+        best_val, best_ref = aggregator(answers, filter_blank)
 
         # Find a matching row to use as base
         matching_rows = [

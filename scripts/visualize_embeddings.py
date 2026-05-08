@@ -619,7 +619,7 @@ def plot_embeddings(
         color_mode: "type" (color by node type) or "document" (color by document)
         axis_percentile: Percentile for axis limits (e.g., 99 clips outliers)
     """
-    fig, ax = plt.subplots(figsize=figsize)
+    _, ax = plt.subplots(figsize=figsize)
 
     # Compute axis limits based on percentile to avoid outlier-stretched axes
     if axis_percentile is not None and axis_percentile < 100:
@@ -645,7 +645,6 @@ def plot_embeddings(
 
     # Track which docs we've added to legend (for document mode)
     docs_in_legend: set[str] = set()
-    types_in_legend: set[str] = set()
 
     # Plot each type
     for type_name, coords in reduced.items():
@@ -768,12 +767,12 @@ async def main() -> None:
     print(f"Method: {method}")
     print(f"Show types: {show_types or 'all'}")
     if hierarchical_sampling:
-        print(f"Sampling mode: hierarchical")
+        print("Sampling mode: hierarchical")
         print(f"  Sections per doc: {samples_per_document or 'all'}")
         print(f"  Paragraphs per section: {samples_per_section or 'all'}")
         print(f"  Sentences per paragraph: {samples_per_paragraph or 'all'}")
     else:
-        print(f"Sampling mode: flat")
+        print("Sampling mode: flat")
         print(f"  Max samples per type: {max_samples or 'unlimited'}")
     print()
 
@@ -839,9 +838,14 @@ async def main() -> None:
             }
             export_data["points"].append(point)
 
+    _write_export_data(output_json, export_data)
+    print(f"Saved coordinate data to: {output_json}")
+
+
+def _write_export_data(output_json: str, export_data: dict) -> None:
+    """Synchronous helper so the async caller does not perform sync file I/O."""
     with open(output_json, "w") as f:
         json.dump(export_data, f)
-    print(f"Saved coordinate data to: {output_json}")
 
 
 if __name__ == "__main__":

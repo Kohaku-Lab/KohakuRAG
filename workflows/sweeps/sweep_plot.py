@@ -178,11 +178,10 @@ def plot_metric(
     """Generate line plot with shaded ±1 std dev range and max value dotted line."""
     aggregated = aggregate_runs(results, line_param, x_param, metric)
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    _, ax = plt.subplots(figsize=(10, 6))
 
     # Track global max for star marker
     global_max_val = float("-inf")
-    global_max_x = None
     global_max_x_idx = None
     global_max_line = None
     global_max_color = None
@@ -252,7 +251,6 @@ def plot_metric(
         for i, x in enumerate(x_vals):
             if maxs[i] > global_max_val:
                 global_max_val = maxs[i]
-                global_max_x = x
                 global_max_x_idx = x_to_pos[x]
                 global_max_line = line_val
                 global_max_color = line.get_color()
@@ -307,7 +305,7 @@ def print_summary_table(
     aggregated = aggregate_runs(results, line_param, x_param, metric)
 
     # Get all x values
-    all_x = sorted(set(row[x_param] for row in results))
+    all_x = sorted({row[x_param] for row in results})
 
     # Print header
     print(f"\n{'=' * 80}")

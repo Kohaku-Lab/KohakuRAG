@@ -19,6 +19,8 @@ from scipy import stats
 
 SWEEPS_DIR = Path("outputs/sweeps")
 
+_LATEX_EMPTY_CELL = " & --"
+
 
 def parse_sweep(sweep_path: Path) -> dict | None:
     """Parse a single sweep directory and return aggregated results."""
@@ -91,7 +93,7 @@ def parse_sweep(sweep_path: Path) -> dict | None:
 
 def get_sorted_values(results: dict, key_idx: int) -> list:
     """Get sorted unique values from result keys."""
-    vals = sorted(set(k[key_idx] for k in results.keys()), key=str)
+    vals = sorted({k[key_idx] for k in results.keys()}, key=str)
     # Try numeric sort if possible
     try:
         return sorted(vals, key=lambda x: float(x))
@@ -203,7 +205,6 @@ def generate_latex_table(
     meta = data["metadata"]
     results = data["results"]
     line_param = meta["line_param"]
-    x_param = meta["x_param"]
 
     line_vals = get_sorted_values(results, 0)
     x_vals = get_sorted_values(results, 1)
@@ -217,7 +218,6 @@ def generate_latex_table(
     best_per_col = {}
     second_best_per_col = {}
     global_best = -1
-    global_best_key = None
 
     for x in x_vals:
         col_scores = []
@@ -227,7 +227,6 @@ def generate_latex_table(
                 col_scores.append((line, val))
                 if val > global_best:
                     global_best = val
-                    global_best_key = (line, x)
 
         # Sort by score descending
         col_scores.sort(key=lambda item: item[1], reverse=True)
@@ -275,7 +274,7 @@ def generate_latex_table(
                     val_str = f"\\underline{{{val_str}}}"
                 row += f" & {val_str}"
             else:
-                row += " & --"
+                row += _LATEX_EMPTY_CELL
 
         # Add average rank if available
         if avg_ranks:
@@ -283,7 +282,7 @@ def generate_latex_table(
             if rank != float("inf"):
                 row += f" & {rank:.2f}"
             else:
-                row += " & --"
+                row += _LATEX_EMPTY_CELL
 
         row += " \\\\"
         lines.append(row)
@@ -338,7 +337,7 @@ def run_significance_tests(data: dict, metric: str = "final") -> None:
 
         for other_name, other_scores, other_mean in configs[1:]:
             # Welch's t-test (does not assume equal variances)
-            t_stat, p_value = stats.ttest_ind(
+            _, p_value = stats.ttest_ind(
                 best_scores, other_scores, equal_var=False
             )
 
@@ -373,7 +372,6 @@ def generate_significance_latex(data: dict, metric: str = "final") -> str:
     meta = data["metadata"]
     results = data["results"]
     line_param = meta["line_param"]
-    x_param = meta["x_param"]
 
     line_vals = get_sorted_values(results, 0)
     x_vals = get_sorted_values(results, 1)
@@ -393,7 +391,7 @@ def generate_significance_latex(data: dict, metric: str = "final") -> str:
             continue
 
         configs.sort(key=lambda c: c[2], reverse=True)
-        best_name, best_scores, _ = configs[0]
+        _, best_scores, _ = configs[0]
 
         for other_name, other_scores, _ in configs[1:]:
             _, p_value = stats.ttest_ind(best_scores, other_scores, equal_var=False)
@@ -463,7 +461,7 @@ def generate_significance_latex(data: dict, metric: str = "final") -> str:
 
                 row += f" & {val_str}{marker}"
             else:
-                row += " & --"
+                row += _LATEX_EMPTY_CELL
         row += " \\\\"
         lines.append(row)
 

@@ -70,7 +70,7 @@ async def main() -> None:
     print(f"Attachment nodes: {attachment_count}")
 
     # Check for image data
-    print(f"\nImage Statistics:")
+    print("\nImage Statistics:")
     print(f"  Image caption nodes: {image_paragraph_count}")
 
     # Try to access image store to count compressed images

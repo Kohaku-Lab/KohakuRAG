@@ -123,7 +123,6 @@ def _extract_embedded_images(
 
                 image_bytes = base_image["image"]
                 image_ext = base_image["ext"]
-                colorspace = base_image.get("colorspace", 0)
                 smask_xref = base_image.get("smask", 0)  # Soft mask (alpha) xref
 
                 # Load the base image

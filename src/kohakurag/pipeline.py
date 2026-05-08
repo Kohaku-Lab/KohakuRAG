@@ -140,15 +140,9 @@ def format_snippets(snippets: Sequence[ContextSnippet]) -> str:
     for snippet in snippets:
         meta = snippet.metadata or {}
         doc_id = str(meta.get("document_id", "unknown"))
-        full_node_id = snippet.node_id
 
-        # Compact node ID: amazon2023:sec1:p2 → sec1:p2
-        node_label = (
-            full_node_id.split(":", 1)[1] if ":" in full_node_id else full_node_id
-        )
-
-        # header = f"[ref_id={doc_id} node={node_label} score={snippet.score:.3f}] "
-        header = f"[ref_id={doc_id}] "  # only necessary info to avoid LLM hallucination and waste tokens
+        # only necessary info to avoid LLM hallucination and waste tokens
+        header = f"[ref_id={doc_id}] "
         text = snippet.text.strip()
         blocks.append(header + text)
 
@@ -274,6 +268,7 @@ class MockChatModel:
         system_prompt: str | None = None,
     ) -> str:
         """Extract context from prompt and return as mock answer."""
+        del system_prompt  # accepted for ChatModel protocol parity, unused by mock
         return "Mock response:\n" + prompt.split("Context:", 1)[-1].strip()[:200]
 
 
@@ -417,7 +412,7 @@ class RAGPipeline:
         return [m for m in matches if m.node.node_id not in ids_with_ancestor]
 
     def _rerank_matches(
-        self, matches: list[RetrievalMatch], num_queries: int
+        self, matches: list[RetrievalMatch]
     ) -> list[RetrievalMatch]:
         """Rerank matches based on the configured strategy.
 
@@ -431,7 +426,6 @@ class RAGPipeline:
 
         Args:
             matches: List of retrieval matches (potentially with duplicates)
-            num_queries: Number of queries used for retrieval
 
         Returns:
             Reranked and deduplicated list of matches
@@ -585,7 +579,7 @@ class RAGPipeline:
         # Apply reranking if strategy is configured
         # Note: reranking also deduplicates and uses frequency + total_score
         if self._rerank_strategy:
-            all_matches = self._rerank_matches(all_matches, len(queries))
+            all_matches = self._rerank_matches(all_matches)
 
         # Apply top_k_final truncation if configured
         if self._top_k_final is not None and self._top_k_final > 0:
@@ -632,6 +626,32 @@ class RAGPipeline:
             snippets=snippets,
         )
 
+    @staticmethod
+    def _section_id_from_snippet(snippet: ContextSnippet) -> str | None:
+        """Return the section id (`doc:sec`) for a hierarchical snippet, else None."""
+        parts = snippet.node_id.split(":")
+        if len(parts) < 2:
+            return None
+        return ":".join(parts[:2])
+
+    async def _collect_images_in_section(
+        self, section_id: str
+    ) -> list[StoredNode]:
+        """Return image children of a section, swallowing missing-node errors."""
+        try:
+            section_node = await self._store.get_node(section_id)
+        except KeyError:
+            return []
+        images: list[StoredNode] = []
+        for child_id in section_node.child_ids:
+            try:
+                child_node = await self._store.get_node(child_id)
+            except KeyError:
+                continue
+            if child_node.metadata.get("attachment_type") == "image":
+                images.append(child_node)
+        return images
+
     async def _extract_images_from_snippets(
         self, snippets: Sequence[ContextSnippet]
     ) -> list[StoredNode]:
@@ -639,47 +659,16 @@ class RAGPipeline:
 
         Looks at all sections containing retrieved snippets and collects
         their image children (paragraphs with attachment_type='image').
-
-        Args:
-            snippets: Retrieved context snippets
-
-        Returns:
-            List of image nodes
         """
         image_nodes: list[StoredNode] = []
         seen_sections: set[str] = set()
 
         for snippet in snippets:
-            # Get section ID from node ID (format: doc:sec:p:s → doc:sec)
-            parts = snippet.node_id.split(":")
-            if len(parts) >= 2:
-                section_id = ":".join(parts[:2])
-            else:
-                continue  # Not a hierarchical node
-
-            # Skip if we already processed this section
-            if section_id in seen_sections:
+            section_id = self._section_id_from_snippet(snippet)
+            if section_id is None or section_id in seen_sections:
                 continue
             seen_sections.add(section_id)
-
-            try:
-                # Get the section node
-                section_node = await self._store.get_node(section_id)
-
-                # Check all children for images
-                for child_id in section_node.child_ids:
-                    try:
-                        child_node = await self._store.get_node(child_id)
-
-                        # Check if this is an image node
-                        if child_node.metadata.get("attachment_type") == "image":
-                            image_nodes.append(child_node)
-
-                    except KeyError:
-                        continue  # Child node not found
-
-            except KeyError:
-                continue  # Section node not found
+            image_nodes.extend(await self._collect_images_in_section(section_id))
 
         return image_nodes
 

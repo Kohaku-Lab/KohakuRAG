@@ -155,7 +155,7 @@ def aggregate_runs(cell_dir: Path, num_runs: int) -> Path:
     agg_path = cell_dir / "aggregated.csv"
 
     if agg_path.exists():
-        print(f"    Aggregated file already exists, skipping")
+        print("    Aggregated file already exists, skipping")
         return agg_path
 
     # Collect run files
@@ -163,7 +163,7 @@ def aggregate_runs(cell_dir: Path, num_runs: int) -> Path:
     existing = [f for f in run_files if Path(f).exists()]
 
     if not existing:
-        print(f"    WARNING: No run files found!")
+        print("    WARNING: No run files found!")
         return agg_path
 
     config = Config(
@@ -436,13 +436,17 @@ def measure_context_length(expansion: dict, dedup: dict) -> dict:
     from kohakurag.datastore import KVaultNodeStore, matches_to_snippets
     from kohakurag.embeddings import JinaV4EmbeddingModel
 
+    def _load_questions_sync(path):
+        """Synchronous helper so the async caller does not perform sync file I/O."""
+        with open(path, newline="", encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            return [(row["id"], row["question"]) for row in reader]
+
     async def _measure():
         embedder = JinaV4EmbeddingModel(truncate_dim=512, task="retrieval")
         store = KVaultNodeStore(Path(DB), table_prefix=TABLE_PREFIX, dimensions=None)
 
-        with open(QUESTIONS, newline="", encoding="utf-8-sig") as f:
-            reader = csv.DictReader(f)
-            questions = [(row["id"], row["question"]) for row in reader]
+        questions = _load_questions_sync(QUESTIONS)
 
         planner = _DiverseQueryPlanner(max_queries=4)
 
@@ -583,7 +587,7 @@ if __name__ == "__main__":
             agg_path = aggregate_runs(cell_dir, ENSEMBLE_RUNS)
 
             # Validate
-            print(f"    Validating...")
+            print("    Validating...")
             scores = validate(agg_path)
 
             if key not in results:

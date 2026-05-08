@@ -14,26 +14,28 @@ TABLE_PREFIX = "wattbot_img"
 QUESTIONS = "data/train_QA.csv"
 METADATA = "data/metadata.csv"
 
+_DEFAULT_MODEL = "openai/GPT-5-mini"
+
 # Models to run in parallel
 MODELS = [
     {
-        "model": "openai/GPT-5-mini",
+        "model": _DEFAULT_MODEL,
         "output": "outputs/train-result-gpt-mini/single_preds1.csv",
     },
     {
-        "model": "openai/GPT-5-mini",
+        "model": _DEFAULT_MODEL,
         "output": "outputs/train-result-gpt-mini/single_preds2.csv",
     },
     {
-        "model": "openai/GPT-5-mini",
+        "model": _DEFAULT_MODEL,
         "output": "outputs/train-result-gpt-mini/single_preds3.csv",
     },
     {
-        "model": "openai/GPT-5-mini",
+        "model": _DEFAULT_MODEL,
         "output": "outputs/train-result-gpt-mini/single_preds4.csv",
     },
     {
-        "model": "openai/GPT-5-mini",
+        "model": _DEFAULT_MODEL,
         "output": "outputs/train-result-gpt-mini/single_preds5.csv",
     },
 ]

@@ -263,6 +263,13 @@ async def compute_stats(
     )
 
 
+def _load_questions(path: str) -> list[tuple[str, str]]:
+    """Synchronous helper so the async caller does not perform sync file I/O."""
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        return [(row["id"], row["question"]) for row in reader]
+
+
 async def main() -> None:
     print("=" * 75)
     print("Context Length Comparison: No Dedup vs Node-ID Dedup vs Tree Dedup")
@@ -278,9 +285,7 @@ async def main() -> None:
 
     # Load questions
     print(f"Loading questions: {QUESTIONS_PATH}")
-    with open(QUESTIONS_PATH, newline="", encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-        questions = [(row["id"], row["question"]) for row in reader]
+    questions = _load_questions(QUESTIONS_PATH)
     print(f"Loaded {len(questions)} questions\n")
 
     planner = DiverseQueryPlanner(max_queries=PLANNER_MAX_QUERIES)
@@ -301,7 +306,7 @@ async def main() -> None:
         raw_matches = await run_retrieval_raw(embedder, store, planner, question)
 
         # Mode 1: No dedup – sort by score, keep duplicates
-        m1 = sorted(list(raw_matches), key=lambda m: m.score, reverse=True)
+        m1 = sorted(raw_matches, key=lambda m: m.score, reverse=True)
         if TOP_K_FINAL:
             m1 = m1[:TOP_K_FINAL]
         s1 = await compute_stats(m1, store)
@@ -360,7 +365,7 @@ async def main() -> None:
     avg_node = statistics.mean([s.total_chars for s in results_node_dedup])
     avg_tree = statistics.mean([s.total_chars for s in results_tree_dedup])
 
-    print(f"\n  Context reduction (chars):")
+    print("\n  Context reduction (chars):")
     print(
         f"    Node-ID dedup vs No dedup:   {(1 - avg_node / avg_no) * 100:5.1f}% reduction"
     )
@@ -376,7 +381,7 @@ async def main() -> None:
     avg_m_node = statistics.mean([s.num_matches for s in results_node_dedup])
     avg_m_tree = statistics.mean([s.num_matches for s in results_tree_dedup])
 
-    print(f"\n  Match reduction:")
+    print("\n  Match reduction:")
     print(
         f"    Node-ID dedup vs No dedup:   {(1 - avg_m_node / avg_m_no) * 100:5.1f}% reduction"
     )

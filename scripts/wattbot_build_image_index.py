@@ -213,9 +213,9 @@ async def main() -> None:
     print(f"Table: {actual_image_table}")
     print(f"Dimensions: {actual_dimensions}")
     if use_direct_embedding:
-        print(f"Method: JinaV4 direct image embedding ✨")
+        print("Method: JinaV4 direct image embedding ✨")
     else:
-        print(f"Method: Caption-based (JinaV3 or existing)")
+        print("Method: Caption-based (JinaV3 or existing)")
     print("\nNow you can use --top-k-images flag with wattbot_answer.py")
     print("=" * 60)
 

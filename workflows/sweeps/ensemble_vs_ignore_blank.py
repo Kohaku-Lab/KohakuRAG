@@ -121,7 +121,7 @@ def format_ref_ids(ref_set: set[str]) -> str:
     """Format set of ref_ids back to string."""
     if not ref_set:
         return "is_blank"
-    return str(sorted(list(ref_set)))
+    return str(sorted(ref_set))
 
 
 def aggregate_independent(

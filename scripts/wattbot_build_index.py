@@ -148,7 +148,7 @@ async def main() -> None:
         # Build hierarchical tree and compute embeddings
         nodes = await indexer.index(payload)
         if not nodes:
-            print(f"  -> no nodes generated, skipping.", flush=True)
+            print("  -> no nodes generated, skipping.", flush=True)
             continue
 
         # Initialize store on first document (infer dimensions)
